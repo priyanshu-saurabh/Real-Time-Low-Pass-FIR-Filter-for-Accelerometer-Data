@@ -21,22 +21,16 @@
 #include "string.h"
 #include "usb_device.h"
 #include <stdio.h>
-#include <stdlib.h>  // For rand()
+#include <stdlib.h>  
 #include <time.h>
 
+#include "FIRFilter.h"
 
 
-char uart_buffer[100];
 
-// Function to initialize random seed
-void init_random_seed() {
-    srand(HAL_GetTick());  // Use system tick as seed
-}
+extern I2C_HandleTypeDef hi2c1;
+extern UART_HandleTypeDef huart2;
 
-// Function to generate random float within a range.'
-float generate_random_float(float min, float max) {
-    return min + ((float)rand() / RAND_MAX) * (max - min);
-}
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 //temp
@@ -45,12 +39,15 @@ float generate_random_float(float min, float max) {
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+#define ACCEL_I2C_ADDR      0x68 << 1  
+#define ACCEL_REG_PWR_MGMT1 0x6B
+#define ACCEL_REG_XOUT_H    0x3B
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+FIRFilter accelFilter;
+char uartBuf[64];
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -100,31 +97,17 @@ static void MX_TIM1_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-void Random_Init(void) {
-    srand(HAL_GetTick()); // Seed the RNG using the system tick
+void Accelerometer_Init(void) {
+    uint8_t data = 0;
+    HAL_I2C_Mem_Write(&hi2c1, ACCEL_I2C_ADDR, ACCEL_REG_PWR_MGMT1, 1, &data, 1, HAL_MAX_DELAY);
 }
-/* USER CODE END 0 */
-void send_dummy_data() {
 
-	 char message[100];
-
-
-	    float temperature = generate_random_float(20.0, 40.0);          // Temperature (°C)
-	    float machine_utilization = generate_random_float(50.0, 100.0); // Utilization (%)
-	    int production_rate = rand() % 200 + 50;                        // Production rate (50-250)
-	    float humidity = generate_random_float(30.0, 80.0);             // Humidity (%)
-
-	    snprintf(message, sizeof(message),
-	             "Temp: %.2f C, Util: %.2f%%, ProdRate: %d, Humidity: %.2f%%\r\n",
-	             temperature, machine_utilization, production_rate, humidity);
-
-
-	    HAL_UART_Transmit(&huart3, (uint8_t *)message, strlen(message), HAL_MAX_DELAY);
-
-
-
-
+int16_t Read_Accel_X(void) {
+    uint8_t rawData[2];
+    HAL_I2C_Mem_Read(&hi2c1, ACCEL_I2C_ADDR, ACCEL_REG_XOUT_H, 1, rawData, 2, HAL_MAX_DELAY);
+    return (int16_t)(rawData[0] << 8 | rawData[1]);
 }
+
 /**
   * @brief  The application entry point.
   * @retval int
@@ -133,6 +116,7 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+	 
 
   /* USER CODE END 1 */
 
@@ -159,9 +143,11 @@ int main(void)
   MX_USB_DEVICE_Init();
   MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
-  Random_Init();
+  
 
-   init_random_seed();
+  FIRFilter_Init(&accelFilter);
+  Accelerometer_Init();
+ 
 
   /* USER CODE END 2 */
 
@@ -170,9 +156,19 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-	  send_dummy_data();
-	          HAL_Delay(1000);
+      int16_t raw_x = Read_Accel_X();
 
+     
+       float ax = raw_x / 16384.0f;
+
+       //  FIR filter
+       float filtered_ax = FIRFilter_Update(&accelFilter, ax);
+
+       //  UART
+       snprintf(uartBuf, sizeof(uartBuf), "AX: %.3f, Filtered: %.3f\r\n", ax, filtered_ax);
+       HAL_UART_Transmit(&huart2, (uint8_t*)uartBuf, strlen(uartBuf), HAL_MAX_DELAY);
+
+       HAL_Delay(50); // 20 Hz sampling 
 //    /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
